@@ -13,6 +13,8 @@ export class DatabaseConnection {
     const connectionString = process.env.DATABASE_URL || 
       'postgresql://postgres:password@localhost:5432/memory_graph';
     
+    console.error('Database connection string:', connectionString);
+    
     this.pool = new Pool({
       connectionString,
       max: 10,
@@ -20,7 +22,6 @@ export class DatabaseConnection {
       connectionTimeoutMillis: 10000,
     });
 
-    // Test connection on startup
     this.pool.on('error', (err) => {
       console.error('Unexpected error on idle client', err);
     });
@@ -49,22 +50,31 @@ export class DatabaseConnection {
     await this.pool.end();
   }
 
-  // Add retry logic for database connection
-  private async waitForDatabase(maxRetries: number = 30): Promise<void> {
+  // Add retry logic for database connection with longer wait
+  private async waitForDatabase(maxRetries: number = 60): Promise<void> {
+    console.error('Waiting for database to become available...');
+    
     for (let i = 0; i < maxRetries; i++) {
       try {
         const client = await this.getClient();
         await client.query('SELECT 1');
         client.release();
-        console.error('Database connection established');
+        console.error('Database connection established successfully');
         return;
       } catch (error) {
-        console.error(`Database connection attempt ${i + 1}/${maxRetries} failed:`, error instanceof Error ? error.message : String(error));
-        if (i === maxRetries - 1) {
-          throw new Error('Failed to connect to database after maximum retries');
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`Database connection attempt ${i + 1}/${maxRetries} failed:`, errorMessage);
+        
+        if (errorMessage.includes('EAI_AGAIN') || errorMessage.includes('ENOTFOUND')) {
+          console.error('DNS resolution failed - network may not be ready yet');
         }
-        // Wait 2 seconds before retrying
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        if (i === maxRetries - 1) {
+          throw new Error(`Failed to connect to database after ${maxRetries} attempts. Last error: ${errorMessage}`);
+        }
+        
+        // Wait 3 seconds before retrying (longer for network issues)
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
     }
   }
@@ -100,69 +110,61 @@ export class DatabaseConnection {
   private async runMigrations(): Promise<void> {
     const client = await this.getClient();
     try {
-      const migrationPath = path.join(__dirname, '../migrations/001_initial_schema.sql');
-      
-      let migrationSQL: string;
-      try {
-        migrationSQL = await fs.readFile(migrationPath, 'utf-8');
-      } catch (error) {
-        // If migration file doesn't exist, create the schema inline
-        console.error('Migration file not found, creating schema inline...');
-        migrationSQL = `
-          -- Create entities table
-          CREATE TABLE IF NOT EXISTS entities (
-              id SERIAL PRIMARY KEY,
-              name TEXT UNIQUE NOT NULL,
-              entity_type TEXT NOT NULL,
-              created_at TIMESTAMP DEFAULT NOW(),
-              updated_at TIMESTAMP DEFAULT NOW()
-          );
+      console.error('Creating database schema inline...');
+      const migrationSQL = `
+        -- Create entities table
+        CREATE TABLE IF NOT EXISTS entities (
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            entity_type TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        );
 
-          -- Create observations table  
-          CREATE TABLE IF NOT EXISTS observations (
-              id SERIAL PRIMARY KEY,
-              entity_id INTEGER REFERENCES entities(id) ON DELETE CASCADE,
-              content TEXT NOT NULL,
-              created_at TIMESTAMP DEFAULT NOW()
-          );
+        -- Create observations table  
+        CREATE TABLE IF NOT EXISTS observations (
+            id SERIAL PRIMARY KEY,
+            entity_id INTEGER REFERENCES entities(id) ON DELETE CASCADE,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
 
-          -- Create relations table
-          CREATE TABLE IF NOT EXISTS relations (
-              id SERIAL PRIMARY KEY,
-              from_entity_id INTEGER REFERENCES entities(id) ON DELETE CASCADE,
-              to_entity_id INTEGER REFERENCES entities(id) ON DELETE CASCADE,
-              relation_type TEXT NOT NULL,
-              created_at TIMESTAMP DEFAULT NOW(),
-              UNIQUE(from_entity_id, to_entity_id, relation_type)
-          );
+        -- Create relations table
+        CREATE TABLE IF NOT EXISTS relations (
+            id SERIAL PRIMARY KEY,
+            from_entity_id INTEGER REFERENCES entities(id) ON DELETE CASCADE,
+            to_entity_id INTEGER REFERENCES entities(id) ON DELETE CASCADE,
+            relation_type TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(from_entity_id, to_entity_id, relation_type)
+        );
 
-          -- Create indexes for performance
-          CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
-          CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type);
-          CREATE INDEX IF NOT EXISTS idx_observations_entity_id ON observations(entity_id);
-          CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_entity_id);
-          CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_entity_id);
-          CREATE INDEX IF NOT EXISTS idx_relations_type ON relations(relation_type);
+        -- Create indexes for performance
+        CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+        CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type);
+        CREATE INDEX IF NOT EXISTS idx_observations_entity_id ON observations(entity_id);
+        CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_entity_id);
+        CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_entity_id);
+        CREATE INDEX IF NOT EXISTS idx_relations_type ON relations(relation_type);
 
-          -- Full-text search index for observations
-          CREATE INDEX IF NOT EXISTS idx_observations_content_fts ON observations USING gin(to_tsvector('english', content));
-          CREATE INDEX IF NOT EXISTS idx_entities_name_fts ON entities USING gin(to_tsvector('english', name));
+        -- Full-text search index for observations
+        CREATE INDEX IF NOT EXISTS idx_observations_content_fts ON observations USING gin(to_tsvector('english', content));
+        CREATE INDEX IF NOT EXISTS idx_entities_name_fts ON entities USING gin(to_tsvector('english', name));
 
-          -- Function to update updated_at timestamp
-          CREATE OR REPLACE FUNCTION update_updated_at_column()
-          RETURNS TRIGGER AS $$
-          BEGIN
-              NEW.updated_at = NOW();
-              RETURN NEW;
-          END;
-          $$ language 'plpgsql';
+        -- Function to update updated_at timestamp
+        CREATE OR REPLACE FUNCTION update_updated_at_column()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            NEW.updated_at = NOW();
+            RETURN NEW;
+        END;
+        $$ language 'plpgsql';
 
-          -- Trigger to automatically update updated_at
-          DROP TRIGGER IF EXISTS update_entities_updated_at ON entities;
-          CREATE TRIGGER update_entities_updated_at BEFORE UPDATE ON entities
-              FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-        `;
-      }
+        -- Trigger to automatically update updated_at
+        DROP TRIGGER IF EXISTS update_entities_updated_at ON entities;
+        CREATE TRIGGER update_entities_updated_at BEFORE UPDATE ON entities
+            FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+      `;
       
       await client.query('BEGIN');
       await client.query(migrationSQL);
