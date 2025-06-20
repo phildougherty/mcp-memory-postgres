@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -9,6 +8,7 @@ import {
 import { PoolClient } from 'pg';
 import { DatabaseConnection } from './database.js';
 import { Command } from 'commander';
+import { createServer } from 'http';
 
 // Interface definitions
 interface Entity {
@@ -383,9 +383,9 @@ program
   .name('mcp-server-memory')
   .description('Memory MCP Server with PostgreSQL backend')
   .version('0.6.3')
-  .option('--transport <type>', 'transport type (stdio, sse)', 'stdio')
-  .option('--host <host>', 'host to bind to (sse)', '0.0.0.0')
-  .option('--port <port>', 'port to bind to (sse)', '3001')
+  .option('--transport <type>', 'transport type (stdio, http)', 'stdio')
+  .option('--host <host>', 'host to bind to (http)', '0.0.0.0')
+  .option('--port <port>', 'port to bind to (http)', '3001')
   .parse();
 
 const opts = program.opts();
@@ -407,7 +407,7 @@ const server = new Server({
   },
 });
 
-// Tool definitions
+// Tool definitions (same as before)
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
@@ -623,25 +623,80 @@ async function main() {
   try {
     await db.initializeDatabase();
     
-    let serverTransport;
-    
-    switch (transport) {
-      case 'sse':
-        // SSE Transport - correct constructor without host option
-        serverTransport = new SSEServerTransport("/sse", {
-          port: port
-        });
-        console.error(`Memory MCP Server running on SSE at http://${host}:${port}/sse`);
-        break;
+    if (transport === 'http') {
+      // Create HTTP server for MCP over HTTP
+      const httpServer = createServer(async (req, res) => {
+        // Enable CORS
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
         
-      case 'stdio':
-      default:
-        serverTransport = new StdioServerTransport();
-        console.error("Memory MCP Server running on stdio");
-        break;
+        if (req.method === 'OPTIONS') {
+          res.writeHead(200);
+          res.end();
+          return;
+        }
+        
+        if (req.method === 'GET' && req.url === '/health') {
+          res.writeHead(200, { 'Content-Type': 'text/plain' });
+          res.end('OK');
+          return;
+        }
+        
+        if (req.method === 'POST' && req.url === '/') {
+          let body = '';
+          req.on('data', chunk => {
+            body += chunk.toString();
+          });
+          
+          req.on('end', async () => {
+            try {
+              console.error('Received HTTP request:', body);
+              const request = JSON.parse(body);
+              
+              let response;
+              
+              // Handle MCP requests
+              if (request.method === 'tools/list') {
+                const toolsResponse = await server.request(
+                  { method: 'tools/list', params: {} },
+                  ListToolsRequestSchema
+                );
+                response = toolsResponse;
+              } else if (request.method === 'tools/call') {
+                const callResponse = await server.request(request, CallToolRequestSchema);
+                response = callResponse;
+              } else {
+                throw new Error(`Unknown method: ${request.method}`);
+              }
+              
+              res.setHeader('Content-Type', 'application/json');
+              res.writeHead(200);
+              res.end(JSON.stringify(response));
+            } catch (error) {
+              console.error('HTTP request error:', error);
+              res.writeHead(400);
+              res.end(JSON.stringify({ 
+                error: error instanceof Error ? error.message : String(error) 
+              }));
+            }
+          });
+        } else {
+          res.writeHead(404);
+          res.end('Not Found');
+        }
+      });
+      
+      httpServer.listen(port, host, () => {
+        console.error(`Memory MCP Server running on HTTP at http://${host}:${port}/`);
+      });
+      
+    } else {
+      // Use stdio transport
+      const serverTransport = new StdioServerTransport();
+      await server.connect(serverTransport);
+      console.error("Memory MCP Server running on stdio");
     }
-    
-    await server.connect(serverTransport);
     
   } catch (error) {
     console.error("Failed to start server:", error instanceof Error ? error.message : String(error));
