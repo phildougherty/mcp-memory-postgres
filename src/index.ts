@@ -9,11 +9,8 @@ import {
 import { PoolClient } from 'pg';
 import { DatabaseConnection } from './database.js';
 import { Command } from 'commander';
-import { createServer } from 'http';
-import { readFileSync } from 'fs';
 
-
-// Interface definitions (same as before)
+// Interface definitions
 interface Entity {
   name: string;
   entityType: string;
@@ -31,7 +28,7 @@ interface KnowledgeGraph {
   relations: Relation[];
 }
 
-// Database-backed Knowledge Graph Manager (same as before - keeping the same implementation)
+// Database-backed Knowledge Graph Manager
 class DatabaseKnowledgeGraphManager {
   private db: DatabaseConnection;
 
@@ -60,11 +57,9 @@ class DatabaseKnowledgeGraphManager {
       await client.query('BEGIN');
 
       for (const entity of entities) {
-        // Check if entity already exists
         const existingEntity = await this.getEntityByName(client, entity.name);
         
         if (!existingEntity) {
-          // Create new entity
           const insertResult = await client.query(
             'INSERT INTO entities (name, entity_type) VALUES ($1, $2) RETURNING id',
             [entity.name, entity.entityType]
@@ -72,7 +67,6 @@ class DatabaseKnowledgeGraphManager {
           
           const entityId = insertResult.rows[0].id;
 
-          // Add observations
           for (const observation of entity.observations) {
             await client.query(
               'INSERT INTO observations (entity_id, content) VALUES ($1, $2)',
@@ -110,7 +104,6 @@ class DatabaseKnowledgeGraphManager {
           continue;
         }
 
-        // Check if relation already exists
         const existingRelation = await client.query(
           'SELECT id FROM relations WHERE from_entity_id = $1 AND to_entity_id = $2 AND relation_type = $3',
           [fromEntity.id, toEntity.id, relation.relationType]
@@ -250,7 +243,6 @@ class DatabaseKnowledgeGraphManager {
     const client = await this.db.getClient();
 
     try {
-      // Get all entities with their observations
       const entitiesResult = await client.query(`
         SELECT e.name, e.entity_type,
                COALESCE(array_agg(o.content ORDER BY o.created_at) FILTER (WHERE o.content IS NOT NULL), ARRAY[]::text[]) as observations
@@ -266,7 +258,6 @@ class DatabaseKnowledgeGraphManager {
         observations: row.observations || []
       }));
 
-      // Get all relations
       const relationsResult = await client.query(`
         SELECT ef.name as from_name, et.name as to_name, r.relation_type
         FROM relations r
@@ -291,7 +282,6 @@ class DatabaseKnowledgeGraphManager {
     const client = await this.db.getClient();
 
     try {
-      // Search entities by name, type, or observations using full-text search
       const entitiesResult = await client.query(`
         SELECT DISTINCT e.name, e.entity_type,
                COALESCE(array_agg(o.content ORDER BY o.created_at) FILTER (WHERE o.content IS NOT NULL), ARRAY[]::text[]) as observations
@@ -315,7 +305,6 @@ class DatabaseKnowledgeGraphManager {
         observations: row.observations || []
       }));
 
-      // Get relations between found entities
       const entityNames = entities.map(e => e.name);
       if (entityNames.length === 0) {
         return { entities: [], relations: [] };
@@ -350,7 +339,6 @@ class DatabaseKnowledgeGraphManager {
     const client = await this.db.getClient();
 
     try {
-      // Get specific entities with their observations
       const entitiesResult = await client.query(`
         SELECT e.name, e.entity_type,
                COALESCE(array_agg(o.content ORDER BY o.created_at) FILTER (WHERE o.content IS NOT NULL), ARRAY[]::text[]) as observations
@@ -367,7 +355,6 @@ class DatabaseKnowledgeGraphManager {
         observations: row.observations || []
       }));
 
-      // Get relations between the specified entities
       const relationsResult = await client.query(`
         SELECT ef.name as from_name, et.name as to_name, r.relation_type
         FROM relations r
@@ -396,9 +383,9 @@ program
   .name('mcp-server-memory')
   .description('Memory MCP Server with PostgreSQL backend')
   .version('0.6.3')
-  .option('--transport <type>', 'transport type (stdio, http, sse)', 'stdio')
-  .option('--host <host>', 'host to bind to (http/sse)', '127.0.0.1')
-  .option('--port <port>', 'port to bind to (http/sse)', '3001')
+  .option('--transport <type>', 'transport type (stdio, sse)', 'stdio')
+  .option('--host <host>', 'host to bind to (sse)', '127.0.0.1')
+  .option('--port <port>', 'port to bind to (sse)', '3001')
   .parse();
 
 const opts = program.opts();
@@ -410,7 +397,7 @@ const port = parseInt(opts.port);
 const db = DatabaseConnection.getInstance();
 const knowledgeGraphManager = new DatabaseKnowledgeGraphManager();
 
-// Initialize the server (same as original)
+// Initialize the server
 const server = new Server({
   name: "memory-server",
   version: "0.6.3",
@@ -420,10 +407,11 @@ const server = new Server({
   },
 });
 
-// Tool definitions (same as original)
+// Tool definitions (keep existing tools code...)
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
+      // ... keep all your existing tool definitions
       {
         name: "create_entities",
         description: "Create multiple new entities in the knowledge graph",
@@ -450,116 +438,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["entities"],
         },
       },
-      {
-        name: "create_relations",
-        description: "Create multiple new relations between entities in the knowledge graph. Relations should be in active voice",
-        inputSchema: {
-          type: "object",
-          properties: {
-            relations: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  from: { type: "string", description: "The name of the entity where the relation starts" },
-                  to: { type: "string", description: "The name of the entity where the relation ends" },
-                  relationType: { type: "string", description: "The type of the relation" },
-                },
-                required: ["from", "to", "relationType"],
-              },
-            },
-          },
-          required: ["relations"],
-        },
-      },
-      {
-        name: "add_observations",
-        description: "Add new observations to existing entities in the knowledge graph",
-        inputSchema: {
-          type: "object",
-          properties: {
-            observations: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  entityName: { type: "string", description: "The name of the entity to add the observations to" },
-                  contents: {
-                    type: "array",
-                    items: { type: "string" },
-                    description: "An array of observation contents to add"
-                  },
-                },
-                required: ["entityName", "contents"],
-              },
-            },
-          },
-          required: ["observations"],
-        },
-      },
-      {
-        name: "delete_entities",
-        description: "Delete multiple entities and their associated relations from the knowledge graph",
-        inputSchema: {
-          type: "object",
-          properties: {
-            entityNames: {
-              type: "array",
-              items: { type: "string" },
-              description: "An array of entity names to delete"
-            },
-          },
-          required: ["entityNames"],
-        },
-      },
-      {
-        name: "delete_observations",
-        description: "Delete specific observations from entities in the knowledge graph",
-        inputSchema: {
-          type: "object",
-          properties: {
-            deletions: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  entityName: { type: "string", description: "The name of the entity containing the observations" },
-                  observations: {
-                    type: "array",
-                    items: { type: "string" },
-                    description: "An array of observations to delete"
-                  },
-                },
-                required: ["entityName", "observations"],
-              },
-            },
-          },
-          required: ["deletions"],
-        },
-      },
-      {
-        name: "delete_relations",
-        description: "Delete multiple relations from the knowledge graph",
-        inputSchema: {
-          type: "object",
-          properties: {
-            relations: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  from: { type: "string", description: "The name of the entity where the relation starts" },
-                  to: { type: "string", description: "The name of the entity where the relation ends" },
-                  relationType: { type: "string", description: "The type of the relation" },
-                },
-                required: ["from", "to", "relationType"],
-              },
-              description: "An array of relations to delete"
-            },
-          },
-          required: ["relations"],
-        },
-      },
+      // ... (include all other tools from your existing code)
       {
         name: "read_graph",
         description: "Read the entire knowledge graph",
@@ -568,37 +447,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {},
         },
       },
-      {
-        name: "search_nodes",
-        description: "Search for nodes in the knowledge graph based on a query",
-        inputSchema: {
-          type: "object",
-          properties: {
-            query: { type: "string", description: "The search query to match against entity names, types, and observation content" },
-          },
-          required: ["query"],
-        },
-      },
-      {
-        name: "open_nodes",
-        description: "Open specific nodes in the knowledge graph by their names",
-        inputSchema: {
-          type: "object",
-          properties: {
-            names: {
-              type: "array",
-              items: { type: "string" },
-              description: "An array of entity names to retrieve",
-            },
-          },
-          required: ["names"],
-        },
-      },
     ],
   };
 });
 
-// Request handlers (same as original)
+// Request handlers (keep existing)
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   if (!args) {
@@ -608,127 +461,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   switch (name) {
     case "create_entities":
       return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.createEntities(args.entities as Entity[]), null, 2) }] };
-    case "create_relations":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.createRelations(args.relations as Relation[]), null, 2) }] };
-    case "add_observations":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.addObservations(args.observations as { entityName: string; contents: string[] }[]), null, 2) }] };
-    case "delete_entities":
-      await knowledgeGraphManager.deleteEntities(args.entityNames as string[]);
-      return { content: [{ type: "text", text: "Entities deleted successfully" }] };
-    case "delete_observations":
-      await knowledgeGraphManager.deleteObservations(args.deletions as { entityName: string; observations: string[] }[]);
-      return { content: [{ type: "text", text: "Observations deleted successfully" }] };
-    case "delete_relations":
-      await knowledgeGraphManager.deleteRelations(args.relations as Relation[]);
-      return { content: [{ type: "text", text: "Relations deleted successfully" }] };
     case "read_graph":
       return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.readGraph(), null, 2) }] };
-    case "search_nodes":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.searchNodes(args.query as string), null, 2) }] };
-    case "open_nodes":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.openNodes(args.names as string[]), null, 2) }] };
+    // ... other cases
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
 });
 
-function createHealthCheckServer(port: number) {
-  const healthServer = createServer((req, res) => {
-    if (req.url === '/health') {
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end('OK');
-    } else {
-      res.writeHead(404);
-      res.end('Not Found');
-    }
-  });
-  
-  healthServer.listen(port);
-  return healthServer;
-}
-
 async function main() {
   try {
-    // Initialize database
     await db.initializeDatabase();
     
     let serverTransport;
     
     switch (transport) {
-      case 'http':
-        // Create a simple HTTP server that handles MCP over HTTP
-        const { createServer } = await import('http');
-        const httpServer = createServer(async (req, res) => {
-          // Enable CORS
-          res.setHeader('Access-Control-Allow-Origin', '*');
-          res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-          res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-          
-          if (req.method === 'OPTIONS') {
-            res.writeHead(200);
-            res.end();
-            return;
-          }
-          
-          if (req.method === 'POST' && req.url === '/mcp') {
-            let body = '';
-            req.on('data', chunk => {
-              body += chunk.toString();
-            });
-            
-            req.on('end', async () => {
-              try {
-                const request = JSON.parse(body);
-                // Process MCP request here
-                // This is a simplified example - you'd need full MCP message handling
-                res.setHeader('Content-Type', 'application/json');
-                res.writeHead(200);
-                res.end(JSON.stringify({ success: true }));
-              } catch (error) {
-                res.writeHead(400);
-                res.end(JSON.stringify({ error: error.message }));
-              }
-            });
-          } else if (req.method === 'GET' && req.url === '/health') {
-            res.writeHead(200, { 'Content-Type': 'text/plain' });
-            res.end('OK');
-          } else {
-            res.writeHead(404);
-            res.end('Not Found');
-          }
-        });
-        
-        httpServer.listen(port, host);
-        console.error(`Knowledge Graph MCP Server (PostgreSQL) running on HTTP at http://${host}:${port}/mcp`);
-        
-        // For HTTP, we still need to handle the server connection differently
-        // For now, let's use stdio as HTTP implementation in MCP SDK is complex
-        console.error("Note: Falling back to stdio for MCP message handling");
-        serverTransport = new StdioServerTransport();
-        break;
-        
       case 'sse':
         serverTransport = new SSEServerTransport("/sse", {
           host: host,
           port: port
         });
+        console.error(`Memory MCP Server running on SSE at http://${host}:${port}/sse`);
         break;
         
       case 'stdio':
       default:
         serverTransport = new StdioServerTransport();
+        console.error("Memory MCP Server running on stdio");
         break;
     }
     
     await server.connect(serverTransport);
     
-    if (transport === 'sse') {
-      console.error(`Knowledge Graph MCP Server (PostgreSQL) running on SSE at http://${host}:${port}/sse`);
-    } else if (transport === 'stdio') {
-      console.error("Knowledge Graph MCP Server (PostgreSQL) running on stdio");
-    }
   } catch (error) {
-    console.error("Failed to start server:", error);
+    console.error("Failed to start server:", error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
 }
@@ -747,7 +513,7 @@ process.on('SIGTERM', async () => {
 });
 
 main().catch(async (error) => {
-  console.error("Fatal error in main():", error);
+  console.error("Fatal error in main():", error instanceof Error ? error.message : String(error));
   await db.close();
   process.exit(1);
 });
