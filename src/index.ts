@@ -680,24 +680,229 @@ async function main() {
                   }
                 };
               } else if (request.method === 'tools/list') {
-                const toolsResult = await server.request(
-                  { method: 'tools/list', params: request.params || {} },
-                  ListToolsRequestSchema
-                );
+                // Return tools directly instead of using server.request
                 response = {
                   id: request.id,
                   jsonrpc: "2.0",
-                  result: toolsResult
+                  result: {
+                    tools: [
+                      {
+                        name: "create_entities",
+                        description: "Create multiple new entities in the knowledge graph",
+                        inputSchema: {
+                          type: "object",
+                          properties: {
+                            entities: {
+                              type: "array",
+                              items: {
+                                type: "object",
+                                properties: {
+                                  name: { type: "string", description: "The name of the entity" },
+                                  entityType: { type: "string", description: "The type of the entity" },
+                                  observations: {
+                                    type: "array",
+                                    items: { type: "string" },
+                                    description: "An array of observation contents associated with the entity"
+                                  },
+                                },
+                                required: ["name", "entityType", "observations"],
+                              },
+                            },
+                          },
+                          required: ["entities"],
+                        },
+                      },
+                      {
+                        name: "create_relations",
+                        description: "Create multiple new relations between entities in the knowledge graph. Relations should be in active voice",
+                        inputSchema: {
+                          type: "object",
+                          properties: {
+                            relations: {
+                              type: "array",
+                              items: {
+                                type: "object",
+                                properties: {
+                                  from: { type: "string", description: "The name of the entity where the relation starts" },
+                                  to: { type: "string", description: "The name of the entity where the relation ends" },
+                                  relationType: { type: "string", description: "The type of the relation" },
+                                },
+                                required: ["from", "to", "relationType"],
+                              },
+                            },
+                          },
+                          required: ["relations"],
+                        },
+                      },
+                      {
+                        name: "add_observations",
+                        description: "Add new observations to existing entities in the knowledge graph",
+                        inputSchema: {
+                          type: "object",
+                          properties: {
+                            observations: {
+                              type: "array",
+                              items: {
+                                type: "object",
+                                properties: {
+                                  entityName: { type: "string", description: "The name of the entity to add the observations to" },
+                                  contents: {
+                                    type: "array",
+                                    items: { type: "string" },
+                                    description: "An array of observation contents to add"
+                                  },
+                                },
+                                required: ["entityName", "contents"],
+                              },
+                            },
+                          },
+                          required: ["observations"],
+                        },
+                      },
+                      {
+                        name: "delete_entities",
+                        description: "Delete multiple entities and their associated relations from the knowledge graph",
+                        inputSchema: {
+                          type: "object",
+                          properties: {
+                            entityNames: {
+                              type: "array",
+                              items: { type: "string" },
+                              description: "An array of entity names to delete"
+                            },
+                          },
+                          required: ["entityNames"],
+                        },
+                      },
+                      {
+                        name: "delete_observations",
+                        description: "Delete specific observations from entities in the knowledge graph",
+                        inputSchema: {
+                          type: "object",
+                          properties: {
+                            deletions: {
+                              type: "array",
+                              items: {
+                                type: "object",
+                                properties: {
+                                  entityName: { type: "string", description: "The name of the entity containing the observations" },
+                                  observations: {
+                                    type: "array",
+                                    items: { type: "string" },
+                                    description: "An array of observations to delete"
+                                  },
+                                },
+                                required: ["entityName", "observations"],
+                              },
+                            },
+                          },
+                          required: ["deletions"],
+                        },
+                      },
+                      {
+                        name: "delete_relations",
+                        description: "Delete multiple relations from the knowledge graph",
+                        inputSchema: {
+                          type: "object",
+                          properties: {
+                            relations: {
+                              type: "array",
+                              items: {
+                                type: "object",
+                                properties: {
+                                  from: { type: "string", description: "The name of the entity where the relation starts" },
+                                  to: { type: "string", description: "The name of the entity where the relation ends" },
+                                  relationType: { type: "string", description: "The type of the relation" },
+                                },
+                                required: ["from", "to", "relationType"],
+                              },
+                              description: "An array of relations to delete"
+                            },
+                          },
+                          required: ["relations"],
+                        },
+                      },
+                      {
+                        name: "read_graph",
+                        description: "Read the entire knowledge graph",
+                        inputSchema: {
+                          type: "object",
+                          properties: {},
+                        },
+                      },
+                      {
+                        name: "search_nodes",
+                        description: "Search for nodes in the knowledge graph based on a query",
+                        inputSchema: {
+                          type: "object",
+                          properties: {
+                            query: { type: "string", description: "The search query to match against entity names, types, and observation content" },
+                          },
+                          required: ["query"],
+                        },
+                      },
+                      {
+                        name: "open_nodes",
+                        description: "Open specific nodes in the knowledge graph by their names",
+                        inputSchema: {
+                          type: "object",
+                          properties: {
+                            names: {
+                              type: "array",
+                              items: { type: "string" },
+                              description: "An array of entity names to retrieve",
+                            },
+                          },
+                          required: ["names"],
+                        },
+                      },
+                    ]
+                  }
                 };
               } else if (request.method === 'tools/call') {
-                const callResult = await server.request({
-                  method: 'tools/call',
-                  params: request.params
-                }, CallToolRequestSchema);
+                // Handle tool calls directly
+                const { name, arguments: args } = request.params;
+                
+                let result;
+                switch (name) {
+                  case "create_entities":
+                    result = { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.createEntities(args.entities as Entity[]), null, 2) }] };
+                    break;
+                  case "create_relations":
+                    result = { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.createRelations(args.relations as Relation[]), null, 2) }] };
+                    break;
+                  case "add_observations":
+                    result = { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.addObservations(args.observations as { entityName: string; contents: string[] }[]), null, 2) }] };
+                    break;
+                  case "delete_entities":
+                    await knowledgeGraphManager.deleteEntities(args.entityNames as string[]);
+                    result = { content: [{ type: "text", text: "Entities deleted successfully" }] };
+                    break;
+                  case "delete_observations":
+                    await knowledgeGraphManager.deleteObservations(args.deletions as { entityName: string; observations: string[] }[]);
+                    result = { content: [{ type: "text", text: "Observations deleted successfully" }] };
+                    break;
+                  case "delete_relations":
+                    await knowledgeGraphManager.deleteRelations(args.relations as Relation[]);
+                    result = { content: [{ type: "text", text: "Relations deleted successfully" }] };
+                    break;
+                  case "read_graph":
+                    result = { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.readGraph(), null, 2) }] };
+                    break;
+                  case "search_nodes":
+                    result = { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.searchNodes(args.query as string), null, 2) }] };
+                    break;
+                  case "open_nodes":
+                    result = { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.openNodes(args.names as string[]), null, 2) }] };
+                    break;
+                  default:
+                    throw new Error(`Unknown tool: ${name}`);
+                }
+
                 response = {
                   id: request.id,
                   jsonrpc: "2.0",
-                  result: callResult
+                  result: result
                 };
               } else {
                 response = {
