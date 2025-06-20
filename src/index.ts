@@ -656,9 +656,10 @@ async function main() {
           });
           
           req.on('end', async () => {
+            let request: any;
             try {
               console.error('Received HTTP request:', body);
-              const request = JSON.parse(body);
+              request = JSON.parse(body);
               
               let response;
               
