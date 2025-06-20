@@ -621,6 +621,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 async function main() {
   try {
+    // Add a small delay to ensure postgres is ready
+    if (process.env.NODE_ENV === 'production') {
+      console.error('Waiting 5 seconds for database to be ready...');
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+    
     await db.initializeDatabase();
     
     if (transport === 'http') {
@@ -656,18 +662,51 @@ async function main() {
               
               let response;
               
-              // Handle MCP requests
-              if (request.method === 'tools/list') {
-                const toolsResponse = await server.request(
-                  { method: 'tools/list', params: {} },
+              // Handle MCP JSON-RPC requests
+              if (request.method === 'initialize') {
+                response = {
+                  id: request.id,
+                  jsonrpc: "2.0",
+                  result: {
+                    protocolVersion: "2025-03-26",
+                    capabilities: {
+                      tools: {}
+                    },
+                    serverInfo: {
+                      name: "memory-server",
+                      version: "0.6.3"
+                    }
+                  }
+                };
+              } else if (request.method === 'tools/list') {
+                const toolsResult = await server.request(
+                  { method: 'tools/list', params: request.params || {} },
                   ListToolsRequestSchema
                 );
-                response = toolsResponse;
+                response = {
+                  id: request.id,
+                  jsonrpc: "2.0",
+                  result: toolsResult
+                };
               } else if (request.method === 'tools/call') {
-                const callResponse = await server.request(request, CallToolRequestSchema);
-                response = callResponse;
+                const callResult = await server.request({
+                  method: 'tools/call',
+                  params: request.params
+                }, CallToolRequestSchema);
+                response = {
+                  id: request.id,
+                  jsonrpc: "2.0",
+                  result: callResult
+                };
               } else {
-                throw new Error(`Unknown method: ${request.method}`);
+                response = {
+                  id: request.id,
+                  jsonrpc: "2.0",
+                  error: {
+                    code: -32601,
+                    message: `Unknown method: ${request.method}`
+                  }
+                };
               }
               
               res.setHeader('Content-Type', 'application/json');
@@ -675,10 +714,16 @@ async function main() {
               res.end(JSON.stringify(response));
             } catch (error) {
               console.error('HTTP request error:', error);
-              res.writeHead(400);
-              res.end(JSON.stringify({ 
-                error: error instanceof Error ? error.message : String(error) 
-              }));
+              const errorResponse = {
+                id: request?.id || null,
+                jsonrpc: "2.0",
+                error: {
+                  code: -32603,
+                  message: error instanceof Error ? error.message : String(error)
+                }
+              };
+              res.writeHead(200);  // Use 200 for JSON-RPC errors
+              res.end(JSON.stringify(errorResponse));
             }
           });
         } else {
